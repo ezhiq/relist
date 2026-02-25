@@ -19,6 +19,7 @@ async def relist_unique_gifts(client=None):
             system_version='iOS 16.4',
             app_version='9.7.0'
         )
+        await client.connect()
 
     try:
         while True:
