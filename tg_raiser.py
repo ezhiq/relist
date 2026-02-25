@@ -1,175 +1,88 @@
 import asyncio
+import logging
 import traceback
 
-from telethon import TelegramClient, functions, types
-from telethon.errors import RPCError
+from pyrogram import Client, types
+from pyrogram.errors import FloodWait
 
-import logging
-# Создаем логгеры для разных компонентов
-logger = logging.getLogger("raise_tg")  # Основной логгер для модуля
+logger = logging.getLogger("kurigram_relist")
+logging.basicConfig(level=logging.INFO)
 
-async def relist_unique_gifts(client=None):
+async def relist_unique_gifts(api_id, api_hash, session_name="my_account", no_updates=True):
+    cd = int(input("Введите КД между циклами (сек): "))
 
-    print('Введите кд на поднятие')
-    sex = int(input())
-    if client is None:
-        client = TelegramClient(
-            session=fr"Zabwino",
-            api_id=2040,
-            api_hash='b18441a1ff607e10a989891a5462e627',
-            system_version='iOS 16.4',
-            app_version='9.7.0'
-        )
-        await client.start()
+    async with Client(session_name, api_id=api_id, api_hash=api_hash, no_updates=True) as app:
+        logger.info("✅ Подключено к Telegram")
 
-    try:
         while True:
-            """
-            Перевыставляет уникальные подарки (убирает и снова ставит на продажу)
-            с сохранением цены
-            """
             try:
-                logger.info("✅ Подключено к Telegram")
+                # Получаем все подарки в облаке (сохарнённые)
+                unique_gifts = []
+                async for gift in app.get_chat_gifts("me"):
+                    resale = getattr(gift, "resale_parameters", None)
+                    if resale and getattr(resale, "star_count", 0) > 0 and getattr(gift, "is_saved", False):
+                        unique_gifts.append({
+                            "owned_id": f'https://t.me/nft/{gift.name}',
+                            "current_price": resale.star_count,
+                            "title": getattr(gift, "title", getattr(gift, "name", "NFT без названия"))
+                        })
 
-                # Получаем текущего пользователя
-
-                # Получаем все подарки пользователя (включая уникальные)
-                all_gifts = await client(functions.payments.GetSavedStarGiftsRequest(
-                    peer=types.InputPeerSelf(),
-                    offset="",
-                    limit=100
-                ))
-
-                if not isinstance(all_gifts, types.payments.SavedStarGifts) or not all_gifts.gifts:
-                    logger.info("ℹ️ Нет подарков для перевыставления")
-                    await asyncio.sleep(sex)
+                if not unique_gifts:
+                    logger.info("ℹ️ Нет уникальных подарков на продаже")
+                    await asyncio.sleep(cd)
                     continue
 
-                # Фильтруем только уникальные подарки, которые можно продавать
-                unique_gifts_for_relist = []
+                logger.info(f"📊 Найдено {len(unique_gifts)} уникальных подарков")
 
-                for gift in all_gifts.gifts:
-                    # Проверяем, можно ли продавать этот подарок
-                    if hasattr(gift.gift, 'slug'):
-                        detailed = await client(functions.payments.GetUniqueStarGiftRequest(
-                            slug=gift.gift.slug
-                        ))
+                relisted = 0
+                failed = 0
 
-                        nft_info = {
-                            'saved_id': gift.gift.gift_id,
-                            'current_price': detailed.gift.resell_amount[0].amount if detailed.gift.resell_amount else 0,
-                            'title': getattr(gift.gift, 'title', 'NFT без названия'),
-                            'slug': getattr(gift.gift, 'slug', None),
-                            'can_resell_at': getattr(gift, 'can_resell_at', 0),
-                            'resell_amount': None
-                        }
-
-                        if nft_info['slug']:
-                            try:
-                                detailed = await client(functions.payments.GetUniqueStarGiftRequest(
-                                    slug=nft_info['slug']
-                                ))
-
-                                if (hasattr(detailed, 'gift') and
-                                        hasattr(detailed.gift, 'resell_amount') and
-                                        detailed.gift.resell_amount):
-                                    nft_info['resell_amount'] = detailed.gift.resell_amount
-                                    unique_gifts_for_relist.append(nft_info)
-                            except:
-                                pass
-
-                if not unique_gifts_for_relist:
-                    logger.info("ℹ️ Нет уникальных подарков на продаже для перевыставления")
-                    await asyncio.sleep(sex)
-                    continue
-
-                logger.info(f"📊 Найдено {len(unique_gifts_for_relist)} уникальных подарков на продаже")
-
-                # Перевыставляем каждый подарок
-                relisted_count = 0
-                failed_count = 0
-
-                for gift_info in unique_gifts_for_relist:
-                    saved_id = gift_info['saved_id']
-                    current_price = gift_info['current_price']
-                    title = gift_info['title']
+                for info in unique_gifts:
+                    owned_id = info["owned_id"]
+                    price = info["current_price"]
 
                     try:
-                        # Шаг 1: Убираем с продажи (цена = 0)
-                        await client(functions.payments.UpdateStarGiftPriceRequest(
-                            stargift=types.InputSavedStarGiftSlug(
-                                slug=gift_info['slug']
-                            ),
-                            resell_amount=types.StarsAmount(amount=0, nanos=0)
-                        ))
+                        # Сбросить цену на 0
+                        await app.set_gift_resale_price(owned_gift_id=owned_id)
+                        await asyncio.sleep(2)
 
-                        await asyncio.sleep(2)  # Пауза между операциями
-
-                        # Шаг 2: Снова выставляем на продажу с той же ценой
-                        await client(functions.payments.UpdateStarGiftPriceRequest(
-                            stargift=types.InputSavedStarGiftSlug(
-                                slug=gift_info['slug']
-                            ),
-                            resell_amount=types.StarsAmount(amount=current_price, nanos=0)
-                        ))
-
-                        relisted_count += 1
-
-                        # Пауза между подарками чтобы не получить flood wait
+                        # Выставить обратно
+                        await app.set_gift_resale_price(owned_gift_id=owned_id, price=types.GiftResalePriceStar(star_count=price))
+                        logger.info(f"✅ Перевыставлено {owned_id}")
+                        relisted += 1
                         await asyncio.sleep(3)
 
-                    except RPCError as e:
-                        if "FLOOD_WAIT" in str(e):
-                            wait_time = int(str(e).split()[-1])
-                            logger.info(f"   ⏳ Flood wait {wait_time} секунд...")
-                            await asyncio.sleep(wait_time + 1)
-
-                            # Пробуем еще раз
-                            try:
-                                # Пропускаем снятие, если уже снято
-                                await client(functions.payments.UpdateStarGiftPriceRequest(
-                                    stargift=types.InputSavedStarGiftChat(
-                                        peer=types.InputPeerSelf(),
-                                        saved_id=saved_id
-                                    ),
-                                    resell_amount=types.StarsAmount(amount=current_price, nanos=0)
-                                ))
-                                logger.info("   ✅ Успешно перевыставлено после flood wait")
-                                relisted_count += 1
-                            except Exception as retry_error:
-                                logger.info(f"   ❌ Ошибка при повторной попытке: {retry_error}")
-                                failed_count += 1
-                        else:
-                            logger.info(f"   ❌ Ошибка при перевыставлении: {e}")
-                            failed_count += 1
+                    except FloodWait as fw:
+                        logger.warning(f"⏳ Flood wait {fw.x} сек")
+                        await asyncio.sleep(fw.x + 1)
+                        # попробуем снова
+                        try:
+                            await app.set_gift_resale_price(owned_gift_id=owned_id, price=types.GiftResalePriceStar(star_count=price))
+                            logger.info("   ✅ После ожидания успешно")
+                            relisted += 1
+                        except Exception as retry_err:
+                            logger.error(f"   ❌ Повторная попытка провалилась: {retry_err}")
+                            failed += 1
 
                     except Exception as e:
-                        logger.info(f"   ❌ Неожиданная ошибка: {e}")
-                        failed_count += 1
+                        logger.error(f"❌ Ошибка при перевыставлении {owned_id}: {e}")
+                        traceback.print_exc()
+                        failed += 1
 
-                logger.info("\n" + "=" * 60)
-                logger.info("📊 РЕЗУЛЬТАТ ПЕРЕВЫСТАВЛЕНИЯ:")
-                logger.info(f"✅ Успешно перевыставлено: {relisted_count}")
-                logger.info(f"❌ Не удалось перевыставить: {failed_count}")
-                if failed_count == 0 and relisted_count > 0:
-                    logger.info("🎉 Все подарки успешно обновлены!")
+                logger.info("=" * 40)
+                logger.info(f"📊 Итог: Успешно: {relisted}, Провалено: {failed}")
 
-                await asyncio.sleep(sex)
+                await asyncio.sleep(cd)
 
-            except RPCError as e:
-                logger.info(f"❌ Ошибка Telegram API: {e}")
-                return
             except Exception as e:
-                logger.info(f"❌ Неожиданная ошибка: {e}")
-                traceback.print_exc()
-                return
-    except:
-        raise
-
-async def tg_raiser_main(client):
-    await relist_unique_gifts(client)
+                logger.exception("❌ Общая ошибка")
+                await asyncio.sleep(cd)
 
 async def main():
-    await relist_unique_gifts()
-if __name__ == '__main__':
+    # Вставь свои api_id/api_hash
+    API_ID = 2040
+    API_HASH = 'b18441a1ff607e10a989891a5462e627'
+    await relist_unique_gifts(API_ID, API_HASH)
+
+if __name__ == "__main__":
     asyncio.run(main())
