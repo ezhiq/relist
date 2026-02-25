@@ -10,6 +10,7 @@ logger = logging.getLogger("raise_tg")  # Основной логгер для �
 
 async def relist_unique_gifts(client=None):
 
+    print('Введите кд на поднятие')
     sex = int(input())
     if client is None:
         client = TelegramClient(
@@ -19,7 +20,7 @@ async def relist_unique_gifts(client=None):
             system_version='iOS 16.4',
             app_version='9.7.0'
         )
-        await client.connect()
+        await client.start()
 
     try:
         while True:
