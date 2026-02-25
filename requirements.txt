@@ -1,0 +1,2 @@
+colorlog~=6.10.1
+Telethon~=1.42.0
