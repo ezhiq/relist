@@ -10,7 +10,7 @@ logging.basicConfig(level=logging.INFO)
 
 async def relist_unique_gifts(api_id, api_hash, session_name="my_account", no_updates=True):
     cd = int(input("Введите КД между циклами (сек): "))
-    session_name = str(input("Введите КД между циклами (сек): "))
+    session_name = str(input("Введите НАЗВАНИЕ СЕССИИ (БЕЗ .SESSION): "))
 
     async with Client(session_name, api_id=api_id, api_hash=api_hash, no_updates=True) as app:
         logger.info("✅ Подключено к Telegram")
